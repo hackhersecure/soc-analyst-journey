@@ -14,7 +14,8 @@ Documentation of my hands-on cybersecurity training — labs, alert investigatio
 
 ## 🔬 Labs & Writeups
 
-*Coming soon — first lab in progress*
+https://www.notion.so/Scratchpad-28bac0da31648007b717efce22723010?source=copy_link
+
 
 ---
 
