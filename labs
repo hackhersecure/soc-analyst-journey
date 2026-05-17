@@ -1,1 +1,246 @@
 
+# Web Attack Investigation Report 🔐
+
+**Platform:** LetsDefend  
+**Date:** May 2026  
+**Investigations:** Open Redirection | Brute Force Attack
+
+---
+
+## Introduction
+
+This report documents two hands-on web attack investigations completed in the LetsDefend SOC Analyst lab. Each investigation involved analysing real Apache access logs, identifying attacker behaviour phase by phase, and extracting key Indicators of Compromise (IOCs) using Linux command-line tools and regex pattern matching.
+
+---
+
+## Investigation 1 — Open Redirection 🔴
+
+### What is Open Redirection?
+
+An Open Redirect vulnerability occurs when a web application uses unvalidated user input to redirect users to external URLs. Attackers exploit this to send victims from a trusted domain to a malicious site — commonly used in phishing campaigns.
+
+**Log File:**
+```
+/root/Desktop/QuestionFiles/Open-Redirection/access.log
+```
+
+---
+
+### Phase 1 — Reconnaissance
+
+| Field | Value |
+|-------|-------|
+| Attacker IP | `254.198.150.19` |
+| Date | 26/Apr/2023 |
+| Time Range | 03:44:47 — 19:45:14 |
+
+The attacker browsed the application normally, testing different `postId` values to map out which pages existed and how the server responded.
+
+**Evidence from log:**
+```
+254.198.150.19 [26/Apr/2023:19:44:47] GET /post?postId=9  → 200 OK
+254.198.150.19 [26/Apr/2023:19:44:47] GET /post?postId=0  → 404 Not Found
+254.198.150.19 [26/Apr/2023:19:44:47] GET /post?postId=   → 400 Bad Request
+254.198.150.19 [26/Apr/2023:19:45:12] GET /post?postId=16 → 404 Not Found
+254.198.150.19 [26/Apr/2023:19:45:12] GET /post?postId=10 → 200 OK
+```
+
+**Command used:**
+```bash
+cat /root/Desktop/QuestionFiles/Open-Redirection/access.log
+```
+
+---
+
+### Phase 2 — Exploitation
+
+| Field | Value |
+|-------|-------|
+| Attacker IP | `86.236.188.85` |
+| Exploitation Start | 27/Apr/2023 15:45:22 |
+| Parameter Attacked | `postId` |
+
+A new IP appeared and began injecting URL-encoded external domains into the `postId` parameter using multiple filter bypass techniques.
+
+**Evidence from log:**
+```
+86.236.188.85 [27/Apr/2023:15:45:22] GET /post?postId=%2f%09%2fexample%2ecom       → 400
+86.236.188.85 [27/Apr/2023:15:45:22] GET /post?postId=%2f%2f%5cexample%2ecom       → 400
+86.236.188.85 [27/Apr/2023:15:45:23] GET /post?postId=https%3a%2f%2fgoogle%2ecom   → 400
+86.236.188.85 [27/Apr/2023:15:45:24] GET /post?postId=%2f%2fwhitelist%40google%2ecom → 400
+```
+
+**Bypass techniques used:**
+
+| Encoded | Decoded | Technique |
+|---------|---------|-----------|
+| `%2f%2f` | `//` | Double slash redirect |
+| `%5c` | `\` | Backslash bypass |
+| `%09` | TAB | Tab character bypass |
+| `%2e%2e` | `..` | Path traversal |
+| `@` trick | `whitelist@google.com` | Domain bypass |
+| `https%3a%2f%2f` | `https://` | Protocol confusion |
+
+**Detection command:**
+```bash
+grep -E "postId=.*(https?|%2f%2f|%5c|%2e%2e|%09)" \
+  /root/Desktop/QuestionFiles/Open-Redirection/access.log
+```
+
+---
+
+### Summary — Open Redirection
+
+| Finding | Value |
+|---------|-------|
+| Recon IP | `254.198.150.19` |
+| Attacker IP | `86.236.188.85` |
+| Parameter Attacked | `postId` |
+| Exploitation Start | `27/Apr/2023 15:45:22` |
+| Targets | `google.com`, `example.com`, `localdomain.pw` |
+| Server Response | 400 Bad Request — all blocked |
+| Outcome | ❌ Attack unsuccessful |
+
+---
+---
+
+## Investigation 2 — Brute Force Attack 🔵
+
+### What is a Brute Force Attack?
+
+A Brute Force attack systematically tries many username and password combinations against a login page until valid credentials are found. It is identified by a high volume of POST requests to a login endpoint from a single IP in a short time window.
+
+**Log File:**
+```
+/root/Desktop/QuestionFiles/Brute-Forcing/access.log
+```
+
+---
+
+### Step 1 — Check Status Code Distribution
+
+```bash
+cat /root/Desktop/QuestionFiles/Brute-Forcing/access.log \
+  | awk '{print $9}' | sort | uniq -c
+```
+
+**Output:**
+```
+204 200
+187 302
+ 15 404
+```
+
+> The attack showed as **302 redirects** (failed login redirecting back to login page) rather than the expected 401 Unauthorized — a common pattern in web apps with redirect-based authentication.
+
+---
+
+### Step 2 — Identify Attacker User Agent
+
+```bash
+cat /root/Desktop/QuestionFiles/Brute-Forcing/access.log \
+  | awk -F'"' '{print $6}' | sort | uniq -c | sort -rn
+```
+
+**Output:**
+```
+372  Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/112.0.5615.50  ← ATTACKER
+ 34  Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/112.0.0.0
+```
+
+**Attacker's user agent:**
+```
+Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.5615.50 Safari/537.36
+```
+
+> ⚠️ The attacker spoofed a real Chrome browser user agent to blend in. Volume (372 requests) revealed the attacker — not the user agent name.
+
+---
+
+### Step 3 — Identify Attacker IP
+
+```bash
+grep "POST" /root/Desktop/QuestionFiles/Brute-Forcing/access.log \
+  | awk '{print $1}' | sort | uniq -c | sort -rn
+```
+
+**Output:**
+```
+161  146.241.73.240  ← ATTACKER
+```
+
+> 161 POST requests to `/login` from a single IP in minutes — unmistakable fingerprint of an automated brute force tool.
+
+---
+
+### Step 4 — Find the Successful Login
+
+```bash
+grep "146.241.73.240" /root/Desktop/QuestionFiles/Brute-Forcing/access.log \
+  | grep "POST.*login"
+```
+
+Every failed attempt returned the same response — status `200` body size `947` (the error page):
+```
+146.241.73.240 [26/Apr/2023:21:42:36] POST /login → 200 (size: 947) FAILED
+146.241.73.240 [26/Apr/2023:21:42:37] POST /login → 200 (size: 947) FAILED
+146.241.73.240 [26/Apr/2023:21:42:38] POST /login → 200 (size: 947) FAILED
+... (repeated 161 times)
+
+146.241.73.240 [26/Apr/2023:21:44:03] POST /login → 200 (size: 947) ← LAST ATTEMPT
+
+146.241.73.240 [26/Apr/2023:21:44:23] GET /post?postId=1 → 200 ✅ LOGIN CONFIRMED
+146.241.73.240 [26/Apr/2023:21:44:23] GET /post?postId=2 → 200 ✅
+146.241.73.240 [26/Apr/2023:21:44:24] GET /post?postId=3 → 200 ✅
+```
+
+> The attacker stopped POST requests and immediately started browsing the site — the pivot from POST to GET confirmed a successful login.
+
+---
+
+### Summary — Brute Force
+
+| Finding | Value |
+|---------|-------|
+| Attacker IP | `146.241.73.240` |
+| User Agent | `Chrome/112.0.5615.50 (spoofed)` |
+| Attack Endpoint | `POST /login` |
+| Total Attempts | 161 POST requests |
+| Failed Login Sign | Status 200, body size 947 |
+| Successful Login | `26/Apr/2023 21:44:03` |
+| Post-login Activity | Browsed all posts (1–10) immediately |
+| Outcome | ✅ Attack successful — access gained |
+
+---
+
+## Tools & Commands Used
+
+| Tool | Purpose |
+|------|---------|
+| `cat` | View full log file |
+| `grep -E` | Filter lines using regex |
+| `awk '{print $1}'` | Extract IP address field |
+| `awk -F'"' '{print $6}'` | Extract user agent field |
+| `awk '{print $9}'` | Extract status code field |
+| `sort` | Sort results |
+| `uniq -c` | Count unique occurrences |
+| `sort -rn` | Sort by count, highest first |
+
+---
+
+## Key Lessons Learned
+
+1. **Always check status codes first** — brute force appeared as 302, not the expected 401.
+2. **Volume reveals the attacker** — 161 POST requests from one IP is always suspicious.
+3. **Encoding evades filters** — URL encoding (`%2f`, `%5c`, `%09`) was used to bypass redirect validation.
+4. **Behaviour change confirms success** — the POST to GET pivot confirmed the successful login without needing to see the password.
+5. **Regex saves hours** — one grep command filtered hundreds of lines instantly.
+
+---
+
+## References
+
+- [LetsDefend SOC Analyst Lab](https://letsdefend.io)
+- [OWASP Open Redirect](https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html)
+- [OWASP Brute Force](https://owasp.org/www-community/attacks/Brute_force_attack)
+- [URL Encoding Reference](https://www.w3schools.com/tags/ref_urlencode.ASP)
